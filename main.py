@@ -10,6 +10,7 @@ import sys
 
 from aliyunsdkcs.request.v20151215 import DescribeClusterDetailRequest
 from aliyunsdkcs.request.v20151215 import DescribeClusterUserKubeconfigRequest
+from aliyunsdkcs.request.v20151215 import ListTagResourcesRequest, ModifyClusterTagsRequest
 from aliyunsdkcore import client as AliyunClient
 from aliyunsdkecs.request.v20140526 import DescribeDisksRequest, DescribeSnapshotsRequest, DescribeNetworkInterfacesRequest, DescribeInstancesRequest, TagResourcesRequest
 from aliyunsdkslb.request.v20140515 import DescribeLoadBalancersRequest
@@ -226,6 +227,45 @@ def tag_slb_instances(cluster_id, tag_key, tag_value, save):
                 else:
                     logging.error("Failed to tag SLB instance %s" % instance_id)
 
+def tag_cluster(cluster_id, tag_key, tag_value, save):
+    req = DescribeClusterDetailRequest.DescribeClusterDetailRequest()
+    req.set_ClusterId(cluster_id)
+    status, header, resp = aliyunClient.get_response(req)
+    tags = []
+    if status == 200:
+        cluster = json.loads(resp)
+        tags = cluster.get('tags')
+    else:
+        logging.error("Failed to get the details of cluster %s: %d" % (cluster_id, status))
+        return False
+    found = False
+    merged = False
+    for tag in tags:
+        if tag.get('key') == tag_key:
+            if tag.get('value') == tag_value:
+                found = True
+                break
+            else:
+                tag['value'] = tag_value
+                merged = True
+    if found:
+        logging.info("Cluster instance %s is tagged" % cluster_id)
+    else:
+        logging.info("Cluster instance %s is not tagged" % cluster_id)
+        mctReq = ModifyClusterTagsRequest.ModifyClusterTagsRequest()
+        mctReq.set_ClusterId(cluster_id)
+        if not merged:
+            tags.append({'key': tag_key, 'value': tag_value})
+        json_object = json.dumps(tags)
+        mctReq.set_content_type("application/json;chrset=utf-8")
+        mctReq.set_content(json_object)
+        try:
+            aliyunClient.do_action_with_exception(mctReq)
+            logging.info("Cluster instance %s is tagged successfully" % cluster_id)
+        except Exception as e:
+            logging.error("Failed to tag cluster instance %s" % cluster_id)
+            logging.error(e)
+
 def list_lb_services():
     services = []
     v1 = client.CoreV1Api()
@@ -299,8 +339,10 @@ if __name__ == '__main__':
 
     aliyunClient = AliyunClient.AcsClient(access_key_id, access_key_secret, region)
 
-    if load_kube_config(cluster_id):
+    tag_cluster(cluster_id, tag_key, tag_value, save)
+    if load_kube_config(cluster_id):        
         nodes = list_nodes()
         for node in nodes:
             node.tag_resources(tag_key, tag_value, save)
         tag_slb_instances(cluster_id, tag_key, tag_value, save)
+        
