@@ -12,9 +12,10 @@ from aliyunsdkcs.request.v20151215 import DescribeClusterDetailRequest
 from aliyunsdkcs.request.v20151215 import DescribeClusterUserKubeconfigRequest
 from aliyunsdkcs.request.v20151215 import ListTagResourcesRequest, ModifyClusterTagsRequest
 from aliyunsdkcore import client as AliyunClient
-from aliyunsdkecs.request.v20140526 import DescribeDisksRequest, DescribeSnapshotsRequest, DescribeNetworkInterfacesRequest, DescribeInstancesRequest, TagResourcesRequest
+from aliyunsdkecs.request.v20140526 import DescribeDisksRequest, DescribeSnapshotsRequest, DescribeNetworkInterfacesRequest, DescribeInstancesRequest, TagResourcesRequest, UntagResourcesRequest
 from aliyunsdkslb.request.v20140515 import DescribeLoadBalancersRequest
 from aliyunsdkslb.request.v20140515 import TagResourcesRequest as TagSLBResourcesRequest
+from aliyunsdkslb.request.v20140515 import UntagResourcesRequest as UntagSLBResourcesRequest
 from aliyunsdkcore.acs_exception.exceptions import ClientException, ServerException
 
 
@@ -39,7 +40,13 @@ def tag_exists(resource, key, value):
     for tag in tags:
         if tag.get('TagKey') == key and tag.get('TagValue') == value:
             return True
-        
+
+def tag_key_exists(resource, key):
+    tags = find_by_path(resource, 'Tags', 'Tag')
+    for tag in tags:
+        if tag.get('TagKey') == key:
+            return True
+
 def do_action(req):
     try:
         req.set_accept_format('json')
@@ -96,6 +103,14 @@ class NodeInfo(object):
         resp = do_action(req)
         return resp != None
 
+    def untag_resource(self, type, id, key):
+        req = UntagResourcesRequest.UntagResourcesRequest()
+        req.set_ResourceType(type)
+        req.set_ResourceIds([id])
+        req.set_TagKeys([key])
+        resp = do_action(req)
+        return resp != None
+
     def tag_resources(self, key, value, save):
         if tag_exists(self.info, key, value):
             logging.info("ECS instance %s is tagged" % self.instance_id)
@@ -144,6 +159,52 @@ class NodeInfo(object):
                     else:
                         logging.error("Failed to tag network interface %s" % network_interface_id)
 
+    def untag_resources(self, key, save):
+        if tag_key_exists(self.info, key):
+            logging.info("ECS instance %s is tagged" % self.instance_id)
+            if save:
+                if self.untag_resource("instance", self.instance_id, key):
+                    logging.info("ECS instance %s is untagged successfully" % self.instance_id)
+                else:
+                    logging.error("Failed to untag ECS instance %s" % self.instance_id)
+        else:
+            logging.info("ECS instance %s is not tagged" % self.instance_id)
+        
+        for disk in self.disks:
+            disk_id = disk.get('DiskId')
+            if tag_key_exists(disk, key):
+                logging.info("Disk %s is tagged" % disk_id)
+                if save:
+                    if self.untag_resource("disk", disk_id, key):
+                        logging.info("Disk %s is untagged successfully" % disk_id)
+                    else:
+                        logging.error("Failed to untag Disk %s" % disk_id)
+            else:
+                logging.info("Disk %s is not tagged" % disk_id)
+
+        for snapshot in self.snapshots:
+            snapshot_id = snapshot.get('SnapshotId')
+            if tag_key_exists(snapshot, key):
+                logging.info("Snapshot %s is tagged" % snapshot_id)
+                if save:
+                    if self.untag_resource("snapshot", snapshot_id, key):
+                        logging.info("Snapshot %s is untagged successfully" % snapshot_id)
+                    else:
+                        logging.error("Failed to untag snapshot %s" % snapshot_id)
+            else:
+                logging.info("Snapshot %s is not tagged" % snapshot_id)
+
+        for network_interface in self.network_interfaces:
+            network_interface_id = network_interface.get('NetworkInterfaceId')
+            if tag_key_exists(network_interface, key):
+                logging.info("Network interface %s is tagged" % network_interface_id)
+                if save:
+                    if self.untag_resource("eni", network_interface_id, key):
+                        logging.info("Network interface %s is untagged successfully" % network_interface_id)
+                    else:
+                        logging.error("Failed to untag network interface %s" % network_interface_id)
+            else:
+                logging.info("Network interface %s is not tagged" % network_interface_id)
 
 def _add_ecs_instances_to_map(instance_map, node_id_list):
     req = DescribeInstancesRequest.DescribeInstancesRequest()
@@ -202,32 +263,58 @@ def list_nodes():
     destribe_ecs_instances(nodes)
     return nodes
 
-def tag_slb_instances(cluster_id, tag_key, tag_value, save):
+def get_slb_instances(cluster_id):
     tags = [{"TagKey":"ack.aliyun.com","TagValue":cluster_id}]
     req = DescribeLoadBalancersRequest.DescribeLoadBalancersRequest()
     req.set_Tags = json.dumps(tags)
     resp = do_action(req)
-    logging.debug(resp)
-    list = resp.get('LoadBalancers').get('LoadBalancer')
+    return resp.get('LoadBalancers').get('LoadBalancer')
 
-    for item in list:
+def tag_slb_instance(instance_id, tag_key, tag_value):
+    req = TagSLBResourcesRequest.TagResourcesRequest()
+    req.set_ResourceType('instance')
+    req.set_ResourceIds([instance_id])
+    req.set_Tags([{"Key":tag_key, "Value":tag_value}])
+    resp = do_action(req)
+    if resp != None:
+        logging.info("SLB instance %s is tagged successfully" % instance_id)
+    else:
+        logging.error("Failed to tag SLB instance %s" % instance_id)
+
+def tag_slb_instances(cluster_id, tag_key, tag_value, save):
+    slb_instances = get_slb_instances(cluster_id)
+    for item in slb_instances:
         instance_id = item.get("LoadBalancerId")
         if tag_exists(item, tag_key, tag_value):
             logging.info("SLB instance %s is tagged" % instance_id)
         else:
             logging.info("SLB instance %s is not tagged" % instance_id)
             if save:
-                req = TagSLBResourcesRequest.TagResourcesRequest()
-                req.set_ResourceType('instance')
-                req.set_ResourceIds([instance_id])
-                req.set_Tags([{"Key":tag_key, "Value":tag_value}])
-                resp = do_action(req)
-                if resp != None:
-                    logging.info("SLB instance %s is tagged successfully" % instance_id)
-                else:
-                    logging.error("Failed to tag SLB instance %s" % instance_id)
+               tag_slb_instance(instance_id, tag_key, tag_value)
 
-def tag_cluster(cluster_id, tag_key, tag_value, save):
+def untag_slb_instance(instance_id, tag_key):
+    req = UntagSLBResourcesRequest.UntagResourcesRequest()
+    req.set_ResourceType('instance')
+    req.set_ResourceIds([instance_id])
+    req.set_TagKeys([tag_key])
+    resp = do_action(req)
+    if resp != None:
+        logging.info("SLB instance %s is untagged successfully" % instance_id)
+    else:
+        logging.error("Failed to untag SLB instance %s" % instance_id)
+
+def untag_slb_instances(cluster_id, tag_key, save):
+    slb_instances = get_slb_instances(cluster_id)
+    for item in slb_instances:
+        instance_id = item.get("LoadBalancerId")
+        if tag_key_exists(item, tag_key):
+            logging.info("SLB instance %s is tagged" % instance_id)
+            if save:
+               untag_slb_instance(instance_id, tag_key)
+        else:
+            logging.info("SLB instance %s is not tagged" % instance_id)
+
+def get_cluster_tags(cluster_id):
     req = DescribeClusterDetailRequest.DescribeClusterDetailRequest()
     req.set_ClusterId(cluster_id)
     status, header, resp = aliyunClient.get_response(req)
@@ -237,7 +324,24 @@ def tag_cluster(cluster_id, tag_key, tag_value, save):
         tags = cluster.get('tags')
     else:
         logging.error("Failed to get the details of cluster %s: %d" % (cluster_id, status))
+    return tags
+
+def update_cluster_tags(cluster_id, tags):
+    mctReq = ModifyClusterTagsRequest.ModifyClusterTagsRequest()
+    mctReq.set_ClusterId(cluster_id)
+    json_object = json.dumps(tags)
+    mctReq.set_content_type("application/json;chrset=utf-8")
+    mctReq.set_content(json_object)
+    status, header, resp = aliyunClient.get_response(mctReq)
+    if status == 200:
+        logging.info("Tags for cluster instance %s is updated successfully" % cluster_id)
+        return True
+    else:
+        logging.error("Failed to update tags for cluster instance %s: %d" % (cluster_id, status))
         return False
+
+def tag_cluster(cluster_id, tag_key, tag_value, save):
+    tags = get_cluster_tags(cluster_id)
     found = False
     merged = False
     for tag in tags:
@@ -252,19 +356,27 @@ def tag_cluster(cluster_id, tag_key, tag_value, save):
         logging.info("Cluster instance %s is tagged" % cluster_id)
     else:
         logging.info("Cluster instance %s is not tagged" % cluster_id)
-        mctReq = ModifyClusterTagsRequest.ModifyClusterTagsRequest()
-        mctReq.set_ClusterId(cluster_id)
-        if not merged:
-            tags.append({'key': tag_key, 'value': tag_value})
-        json_object = json.dumps(tags)
-        mctReq.set_content_type("application/json;chrset=utf-8")
-        mctReq.set_content(json_object)
-        try:
-            aliyunClient.do_action_with_exception(mctReq)
-            logging.info("Cluster instance %s is tagged successfully" % cluster_id)
-        except Exception as e:
-            logging.error("Failed to tag cluster instance %s" % cluster_id)
-            logging.error(e)
+        if save:
+            if not merged:
+                tags.append({'key': tag_key, 'value': tag_value})
+            update_cluster_tags(cluster_id, tags)
+
+def untag_cluster(cluster_id, tag_key, save):
+    tags = get_cluster_tags(cluster_id)
+    found = False
+    newTags = []
+    for tag in tags:
+        if tag.get('key') == tag_key:
+            found = True
+            break;
+        else:
+            newTags.append(tag)
+    if found:
+        logging.info("Cluster instance %s is tagged" % cluster_id)
+        if save:
+            update_cluster_tags(cluster_id, newTags)
+    else:
+        logging.info("Cluster instance %s is not tagged" % cluster_id)
 
 def list_lb_services():
     services = []
@@ -278,7 +390,7 @@ def list_lb_services():
 
 def help():
     print('python3 tag_ack_cluster_resources.py -h|--help')
-    print('python3 tag_ack_cluster_resources.py [-r|--region=cn_hangzhou] [-c|--cluster_id=xxx] [-k|--key=ack.aliyun.com] [-v|--value=xxx] [-s|--save]')
+    print('python3 tag_ack_cluster_resources.py [-r|--region=cn_hangzhou] [-c|--cluster_id=xxx] [-k|--key=ack.aliyun.com] [-v|--value=xxx] [-s|--save] [-u|--untag]')
     sys.exit(1)
 
 if __name__ == '__main__':
@@ -289,9 +401,10 @@ if __name__ == '__main__':
     tag_key = ''
     tag_value = ''
     save = False
+    untag = False
 
     try:
-        (options, args) = getopt.getopt(sys.argv[1:], '-r:-c:-k:-v:-s-h', ['region=', 'cluster_id=', 'key=', 'value=', 'save', 'help'])
+        (options, args) = getopt.getopt(sys.argv[1:], '-r:-c:-k:-v:-s-u-h', ['region=', 'cluster_id=', 'key=', 'value=', 'save', 'untag', 'help'])
     except getopt.GetoptError:
         help()
     
@@ -306,6 +419,8 @@ if __name__ == '__main__':
             tag_value = option[1]
         elif option[0] == '-s' or option[0] == '--save':
             save = True
+        elif option[0] == '-u' or option[0] == '--untag':
+            untag = True
         elif option[0] == '-h' or option[0] == '--help':
             help()
 
@@ -329,20 +444,30 @@ if __name__ == '__main__':
         logging.error("Please add --key param in CLI")
         sys.exit(1)
     
-    if not tag_value:
+    if not tag_value and not untag:
         logging.error("Please add --value param in CLI")
+        sys.exit(1)
+
+    if tag_value and untag:
+        logging.error("Please remove --value param in CLI")
         sys.exit(1)
 
     logging.info("cluster_id = %s" % cluster_id)
     logging.info("region = %s" % region)
     logging.info("save = %r" % save)
+    logging.info("untag = %r" % untag)
 
     aliyunClient = AliyunClient.AcsClient(access_key_id, access_key_secret, region)
 
-    tag_cluster(cluster_id, tag_key, tag_value, save)
-    if load_kube_config(cluster_id):        
+    if load_kube_config(cluster_id):
         nodes = list_nodes()
-        for node in nodes:
-            node.tag_resources(tag_key, tag_value, save)
-        tag_slb_instances(cluster_id, tag_key, tag_value, save)
-        
+        if untag:
+            untag_cluster(cluster_id, tag_key, save)
+            for node in nodes:
+                node.untag_resources(tag_key, save)
+            untag_slb_instances(cluster_id, tag_key, save)
+        else:
+            tag_cluster(cluster_id, tag_key, tag_value, save)
+            for node in nodes:
+                node.tag_resources(tag_key, tag_value, save)
+            tag_slb_instances(cluster_id, tag_key, tag_value, save)
