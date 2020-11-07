@@ -1,6 +1,6 @@
 # ACK Tag Tool
 
-Tag all Alibaba Cloud resources used in specific ACK K8s cluster
+Tag all Alibaba Cloud resources used in specific ACK Kubernetes cluster
 
 # Setup
 
@@ -27,4 +27,10 @@ Tag resource for specific ACK K8s cluster
 
 ```
 python3 main.py  --cluster_id=xxxxxx --region=cn-beijing --key=test-key --value=test-value -s
+```
+
+Untag resource for specific ACK K8s cluster
+
+```
+python3 main.py  --cluster_id=xxxxxx --region=cn-beijing --key=test-key -s -u
 ```

@@ -389,8 +389,9 @@ def list_lb_services():
     return services
 
 def help():
-    print('python3 tag_ack_cluster_resources.py -h|--help')
-    print('python3 tag_ack_cluster_resources.py [-r|--region=cn_hangzhou] [-c|--cluster_id=xxx] [-k|--key=ack.aliyun.com] [-v|--value=xxx] [-s|--save] [-u|--untag]')
+    print('python3 main.py -h|--help')
+    print('python3 main.py [-r|--region=cn_hangzhou] [-c|--cluster_id=xxx] [-k|--key=ack.aliyun.com] [-v|--value=xxx] [-s|--save] [-u|--untag]')
+    print('Prerequisite: set the environment variable of ACCESS_KEY_ID and ACCESS_KEY_SECRET before running.')
     sys.exit(1)
 
 if __name__ == '__main__':
